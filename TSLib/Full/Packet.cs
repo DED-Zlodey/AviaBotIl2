@@ -146,6 +146,13 @@ namespace TSLib.Full
 			{
 				PacketId = BinaryPrimitives.ReadUInt16BigEndian(rawSpan.Slice(TsCrypt.MacLen));
 				PacketTypeFlagged = Raw[TsCrypt.MacLen + 2];
+				// For voice packets, ClientId follows
+				if (PacketType == PacketType.Voice || PacketType == PacketType.VoiceWhisper)
+				{
+					var ext = new S2C();
+					ext.ClientId = BinaryPrimitives.ReadUInt16BigEndian(rawSpan.Slice(TsCrypt.MacLen + 3));
+					HeaderExt = (TDir)(object)ext;
+				}
 			}
 			else if (typeof(TDir) == typeof(C2S))
 			{
@@ -189,5 +196,7 @@ namespace TSLib.Full
 	internal struct S2C
 	{
 		public const int HeaderLen = 3;
+		
+		public ushort ClientId { get; set; }
 	}
 }

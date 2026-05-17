@@ -230,11 +230,15 @@ namespace TSLib.Full
 
 			case PacketType.Voice:
 			case PacketType.VoiceWhisper:
+				var clientId = (ushort)0;
+				if (packet.HeaderExt is S2C s2c)
+					clientId = s2c.ClientId;
 				OutStream?.Write(packet.Data, new Meta
 				{
 					In = new MetaIn
 					{
-						Whisper = packet.PacketType == PacketType.VoiceWhisper
+						Whisper = packet.PacketType == PacketType.VoiceWhisper,
+						Sender = new ClientId(clientId)
 					}
 				});
 				break;
@@ -616,6 +620,46 @@ namespace TSLib.Full
 
 			ctx.PacketHandler.AddOutgoingPacket(tmpBuffer, PacketType.VoiceWhisper);
 		}
+
+		/// <summary>
+		/// Отправляет whisper-аудио с указанным sequence number (packetId).
+		/// Не инкрементирует внутренний counter — используется для отправки
+		/// нескольких пакетов одного фрейма разным получателям с одинаковым seq.
+		/// </summary>
+		public void SendAudioWhisper(in ReadOnlySpan<byte> data, Codec codec, IReadOnlyList<ChannelId> channelIds, IReadOnlyList<ClientId> clientIds, ushort packetId)
+		{
+			var ctx = context;
+			if (ctx is null) return;
+
+			int offset = 2 + 1 + 2 + channelIds.Count * 8 + clientIds.Count * 2;
+			Span<byte> tmpBuffer = stackalloc byte[data.Length + offset];
+			tmpBuffer[2] = (byte)codec;
+			tmpBuffer[3] = (byte)channelIds.Count;
+			tmpBuffer[4] = (byte)clientIds.Count;
+			for (int i = 0; i < channelIds.Count; i++)
+				BinaryPrimitives.WriteUInt64BigEndian(tmpBuffer.Slice(5 + (i * 8)), channelIds[i].Value);
+			for (int i = 0; i < clientIds.Count; i++)
+				BinaryPrimitives.WriteUInt16BigEndian(tmpBuffer.Slice(5 + channelIds.Count * 8 + (i * 2)), clientIds[i].Value);
+			data.CopyTo(tmpBuffer.Slice(offset));
+
+			ctx.PacketHandler.AddOutgoingPacket(tmpBuffer, PacketType.VoiceWhisper, packetId);
+		}
+
+		/// <summary>Возвращает текущий sequence number для VoiceWhisper без инкремента.</summary>
+		public ushort GetNextVoiceWhisperId()
+		{
+			return context?.PacketHandler.GetNextPacketId(PacketType.VoiceWhisper) ?? 0;
+		}
+
+		/// <summary>Инкрементирует sequence counter для VoiceWhisper.</summary>
+		public void IncrementVoiceWhisperCounter()
+		{
+			context?.PacketHandler.IncrementPacketCounter(PacketType.VoiceWhisper);
+		}
+
+		/// <summary>Атомарно выделяет уникальный sequence number для VoiceWhisper.</summary>
+		public ushort AllocateVoiceWhisperId()
+			=> context?.PacketHandler.AllocatePacketId(PacketType.VoiceWhisper) ?? 0;
 
 		public void SendAudioGroupWhisper(in ReadOnlySpan<byte> data, Codec codec, GroupWhisperType type, GroupWhisperTarget target, ulong targetId = 0)
 		{

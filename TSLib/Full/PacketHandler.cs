@@ -215,6 +215,68 @@ namespace TSLib.Full
 			}
 		}
 
+		/// <summary>
+		/// Отправляет пакет с указанным packetId, не инкрементируя внутренний counter.
+		/// Используется для отправки нескольких voice-whisper пакетов одного фрейма
+		/// с одинаковым sequence number разным получателям.
+		/// </summary>
+		public E<string> AddOutgoingPacket(ReadOnlySpan<byte> packet, PacketType packetType, ushort packetId, PacketFlags addFlags = PacketFlags.None)
+		{
+			lock (sendLoopLock)
+			{
+				if (closed != 0)
+					return "Connection closed";
+
+				if (NeedsSplitting(packet.Length) && packetType != PacketType.VoiceWhisper)
+				{
+					if (packetType == PacketType.Voice)
+						return "Voice packet too big";
+
+					var tmpCompress = QuickerLz.Compress(packet, 1);
+					if (tmpCompress.Length < packet.Length)
+					{
+						packet = tmpCompress;
+						addFlags |= PacketFlags.Compressed;
+					}
+
+					if (NeedsSplitting(packet.Length))
+						return AddOutgoingSplitData(packet, packetType, addFlags);
+				}
+				return SendOutgoingDataWithId(packet, packetType, addFlags, packetId);
+			}
+		}
+
+		public ushort GetNextPacketId(PacketType packetType)
+		{
+			lock (sendLoopLock)
+			{
+				return GetPacketCounter(packetType).Id;
+			}
+		}
+
+		public void IncrementPacketCounter(PacketType packetType)
+		{
+			lock (sendLoopLock)
+			{
+				unchecked { packetCounter[(int)packetType]++; }
+				if (packetCounter[(int)packetType] == 0)
+					generationCounter[(int)packetType]++;
+			}
+		}
+
+		/// <summary>Атомарно возвращает следующий packetId и инкрементирует counter.</summary>
+		public ushort AllocatePacketId(PacketType packetType)
+		{
+			lock (sendLoopLock)
+			{
+				var id = GetPacketCounter(packetType).Id;
+				unchecked { packetCounter[(int)packetType]++; }
+				if (packetCounter[(int)packetType] == 0)
+					generationCounter[(int)packetType]++;
+				return id;
+			}
+		}
+
 		private E<string> AddOutgoingSplitData(ReadOnlySpan<byte> rawData, PacketType packetType, PacketFlags addFlags = PacketFlags.None)
 		{
 			int pos = 0;
@@ -254,8 +316,18 @@ namespace TSLib.Full
 		{
 			var ids = GetPacketCounter(packetType);
 			IncPacketCounter(packetType);
+			return SendOutgoingDataInternal(data, packetType, flags, ids.Id, ids.Generation);
+		}
 
-			var packet = new Packet<TOut>(data, packetType, ids.Id, ids.Generation) { PacketType = packetType };
+		private E<string> SendOutgoingDataWithId(ReadOnlySpan<byte> data, PacketType packetType, PacketFlags flags, ushort packetId)
+		{
+			var generation = generationCounter[(int)packetType];
+			return SendOutgoingDataInternal(data, packetType, flags, packetId, generation);
+		}
+
+		private E<string> SendOutgoingDataInternal(ReadOnlySpan<byte> data, PacketType packetType, PacketFlags flags, ushort packetId, uint generationId)
+		{
+			var packet = new Packet<TOut>(data, packetType, packetId, generationId) { PacketType = packetType };
 			if (typeof(TOut) == typeof(C2S)) // TODO: XXX
 			{
 				var meta = (C2S)(object)packet.HeaderExt!;

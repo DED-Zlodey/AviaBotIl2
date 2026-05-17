@@ -13,6 +13,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using TS3AudioBot.Algorithm;
 using TS3AudioBot.Audio;
+using TS3AudioBot.Aviation.Audio;
 using TS3AudioBot.CommandSystem;
 using TS3AudioBot.CommandSystem.Text;
 using TS3AudioBot.Config;
@@ -26,6 +27,7 @@ using TS3AudioBot.Plugins;
 using TS3AudioBot.ResourceFactories;
 using TS3AudioBot.Sessions;
 using TSLib;
+using TSLib.Audio;
 using TSLib.Full;
 using TSLib.Helper;
 using TSLib.Messages;
@@ -118,6 +120,21 @@ namespace TS3AudioBot
 			Scheduler = Injector.GetModuleOrThrow<DedicatedTaskScheduler>();
 			var customTarget = Injector.GetModuleOrThrow<CustomTargetPipe>();
 			player.SetTarget(customTarget);
+
+			// Setup voice recording
+			var recorderPipe = new VoiceRecorderPipe(ts3FullClient);
+			Injector.AddModule(recorderPipe);
+
+			// Install pipe after bot connects
+			ts3client.OnBotConnected += (s, e) =>
+			{
+				Log.Info("Bot:: CONNECTED - Installing VoiceRecorderPipe");
+				ts3FullClient.OutStream = recorderPipe;
+				recorderPipe.OutStream = customTarget;
+				Log.Info("Bot:: VoiceRecorderPipe installed");
+				return Task.CompletedTask;
+			};
+
 			Injector.AddModule(ts3FullClient.Book);
 			playManager = Injector.GetModuleOrThrow<PlayManager>();
 			targetManager = Injector.GetModuleOrThrow<IVoiceTarget>();
@@ -202,6 +219,7 @@ namespace TS3AudioBot
 			Injector.GetModule<PluginManager>()?.StopPlugins(this);
 			Injector.GetModule<PlayManager>()?.Stop();
 			Injector.GetModule<Player>()?.Dispose();
+			Injector.GetModule<VoiceRecorderPipe>()?.Dispose();
 			var tsClient = Injector.GetModule<Ts3Client>();
 			if (tsClient != null)
 				await tsClient.Disconnect();
