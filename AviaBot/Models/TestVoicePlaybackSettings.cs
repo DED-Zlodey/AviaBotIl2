@@ -40,4 +40,10 @@ public class TestVoicePlaybackSettings
 	/// Задержка перед стартом второго трека в миллисекундах.
 	/// </summary>
 	public int Track2DelayMs { get; set; } = 500;
+
+	/// <summary>
+	/// Дистанция для тестовых спикеров в режиме ретрансляции (без RabbitMQ).
+	/// 0 = лобби (эффекты не применяются).
+	/// </summary>
+	public double TestDistance { get; set; } = 0;
 }

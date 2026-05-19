@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,8 +14,20 @@ namespace AviaBot
 {
     class Program
     {
+        [DllImport("winmm.dll")]
+        static extern uint timeBeginPeriod(uint uPeriod);
+
+        [DllImport("winmm.dll")]
+        static extern uint timeEndPeriod(uint uPeriod);
+
         static async Task Main(string[] args)
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                timeBeginPeriod(1);
+                Log.Debug("Timer resolution set to 1ms");
+            }
+
             SetupLogger();
 
             try
@@ -62,6 +75,8 @@ namespace AviaBot
             }
             finally
             {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    timeEndPeriod(1);
                 Log.CloseAndFlush();
             }
         }

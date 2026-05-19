@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -51,6 +52,8 @@ public class Ts3BotService : IHostedService, IDisposable
 	/// </summary>
 	private readonly RecordingSettings _recordingSettings;
 	private readonly VoicePlaybackTestService _voicePlaybackTestService;
+	private readonly SyntheticLoadSettings _syntheticLoadSettings;
+	private readonly TestVoicePlaybackSettings _testSettings;
 
 	/// <summary>
 	/// Планировщик задач, работающий в выделенном потоке.
@@ -99,18 +102,24 @@ public class Ts3BotService : IHostedService, IDisposable
 	/// Сервис для работы с TS3 сервером с использованием AviaBot.
 	/// Управляет подключением, отправкой сообщений и обработкой событий.
 	/// </summary>
+	private SyntheticVoiceInjector? _syntheticInjector;
+
 	public Ts3BotService(
 		IOptions<Ts3Settings> settings,
 		PlayerPositionService positionService,
 		RelaySettings relaySettings,
 		IOptions<RecordingSettings> recordingSettings,
-		VoicePlaybackTestService voicePlaybackTestService)
+		VoicePlaybackTestService voicePlaybackTestService,
+		IOptions<SyntheticLoadSettings> syntheticLoadSettings,
+		IOptions<TestVoicePlaybackSettings> testSettings)
 	{
 		_settings = settings.Value;
 		_positionService = positionService;
 		_relaySettings = relaySettings;
 		_recordingSettings = recordingSettings.Value;
 		_voicePlaybackTestService = voicePlaybackTestService;
+		_syntheticLoadSettings = syntheticLoadSettings.Value;
+		_testSettings = testSettings.Value;
 	}
 
 	/// <summary>
@@ -125,6 +134,18 @@ public class Ts3BotService : IHostedService, IDisposable
 	public Task StartAsync(CancellationToken cancellationToken)
 	{
 		Log.Information("Starting Ts3BotService...");
+
+		try
+		{
+			var proc = Process.GetCurrentProcess();
+			proc.PriorityClass = ProcessPriorityClass.AboveNormal;
+			Log.Information("Process priority elevated to {Priority}", proc.PriorityClass);
+		}
+		catch (Exception ex)
+		{
+			Log.Warning(ex, "Failed to elevate process priority");
+		}
+
 		_cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
 		// Запускаем DedicatedTaskScheduler в отдельном потоке
@@ -255,25 +276,34 @@ public class Ts3BotService : IHostedService, IDisposable
 
 			Log.Information("Connected successfully!");
 
-			// Запускаем тестовое воспроизведение, если включено в конфиге
-			_voicePlaybackTestService.StartPlayback(_tsFullClient);
+			// Запускаем тестовое воспроизведение MP3, если включено (и не используется новый тестовый режим ретрансляции)
+			if (!_testSettings.Enabled)
+				_voicePlaybackTestService.StartPlayback(_tsFullClient);
 
-			// Устанавливаем VoiceRelayPipe -> VoiceRecorderPipe (в потоке scheduler)
+			// Устанавливаем VoiceRelayPipe (в потоке scheduler)
+			VoiceRelayPipe? voiceRelayPipe = null;
 			await _scheduler.InvokeAsync(() =>
 			{
-				var recorderPipe = new VoiceRecorderPipe(
-					_tsFullClient,
-					_recordingSettings.Enabled,
-					_recordingSettings.OutputPath,
-					_recordingSettings.SpeechTimeoutMs);
-				var voiceRelayPipe = new VoiceRelayPipe(
+				voiceRelayPipe = new VoiceRelayPipe(
 					_tsFullClient,
 					_positionService,
-					_relaySettings);
-				voiceRelayPipe.OutStream = recorderPipe;
+					_relaySettings,
+					_testSettings);
 				_tsFullClient.OutStream = voiceRelayPipe;
 				return Task.CompletedTask;
 			});
+
+			// Запускаем синтетическую нагрузку, если включено
+			if (_syntheticLoadSettings.Enabled && voiceRelayPipe != null)
+			{
+				_syntheticInjector = new SyntheticVoiceInjector(
+					voiceRelayPipe,
+					_tsFullClient,
+					_positionService,
+					_syntheticLoadSettings.SpeakerCount,
+					enabled: true);
+				_syntheticInjector.Start();
+			}
 
 			// Ждём отмены (синхронно в потоке scheduler, чтобы не терять контекст)
 			while (!ct.IsCancellationRequested)
@@ -359,6 +389,7 @@ public class Ts3BotService : IHostedService, IDisposable
 
 	public void Dispose()
 	{
+		_syntheticInjector?.Dispose();
 		_cts?.Dispose();
 		_tsFullClient?.Dispose();
 		_scheduler?.Dispose();

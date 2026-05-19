@@ -47,6 +47,9 @@ namespace TSLib.Full
 		// In Packets
 		private readonly GenerationWindow receiveWindowVoice;
 		private readonly GenerationWindow receiveWindowVoiceWhisper;
+		private readonly Dictionary<ushort, GenerationWindow> receiveWindowVoicePerClient = new Dictionary<ushort, GenerationWindow>();
+		private readonly Dictionary<ushort, GenerationWindow> receiveWindowVoiceWhisperPerClient = new Dictionary<ushort, GenerationWindow>();
+		private readonly object voiceWindowLock = new object();
 		private readonly RingQueue<Packet<TIn>> receiveQueueCommand;
 		private readonly RingQueue<Packet<TIn>> receiveQueueCommandLow;
 		// ====
@@ -188,6 +191,27 @@ namespace TSLib.Full
 
 		public E<string> AddOutgoingPacket(ReadOnlySpan<byte> packet, PacketType packetType, PacketFlags addFlags = PacketFlags.None)
 		{
+			// Voice/VoiceWhisper: prepare under lock, send without lock.
+			// socket.SendTo for UDP is thread-safe; serializing it through one lock
+			// becomes the bottleneck with many simultaneous speakers.
+			if (packetType == PacketType.Voice || packetType == PacketType.VoiceWhisper)
+			{
+				if (packetType == PacketType.Voice && NeedsSplitting(packet.Length))
+					return "Voice packet too big";
+
+				Packet<TOut> preparedPacket;
+				lock (sendLoopLock)
+				{
+					if (closed != 0)
+						return "Connection closed";
+
+					var ids = GetPacketCounter(packetType);
+					IncPacketCounter(packetType);
+					preparedPacket = PrepareVoicePacket(packet, packetType, addFlags, ids.Id, ids.Generation);
+				}
+				return SendRaw(ref preparedPacket);
+			}
+
 			lock (sendLoopLock)
 			{
 				if (closed != 0)
@@ -195,9 +219,8 @@ namespace TSLib.Full
 
 				if (NeedsSplitting(packet.Length) && packetType != PacketType.VoiceWhisper)
 				{
-					// VoiceWhisper packets are excluded for some reason
 					if (packetType == PacketType.Voice)
-						return "Voice packet too big"; // This happens when a voice packet is bigger than the allowed size
+						return "Voice packet too big";
 
 					var tmpCompress = QuickerLz.Compress(packet, 1);
 					if (tmpCompress.Length < packet.Length)
@@ -222,6 +245,23 @@ namespace TSLib.Full
 		/// </summary>
 		public E<string> AddOutgoingPacket(ReadOnlySpan<byte> packet, PacketType packetType, ushort packetId, PacketFlags addFlags = PacketFlags.None)
 		{
+			if (packetType == PacketType.Voice || packetType == PacketType.VoiceWhisper)
+			{
+				if (packetType == PacketType.Voice && NeedsSplitting(packet.Length))
+					return "Voice packet too big";
+
+				Packet<TOut> preparedPacket;
+				lock (sendLoopLock)
+				{
+					if (closed != 0)
+						return "Connection closed";
+
+					var generation = generationCounter[(int)packetType];
+					preparedPacket = PrepareVoicePacket(packet, packetType, addFlags, packetId, generation);
+				}
+				return SendRaw(ref preparedPacket);
+			}
+
 			lock (sendLoopLock)
 			{
 				if (closed != 0)
@@ -388,6 +428,23 @@ namespace TSLib.Full
 			return SendRaw(ref packet);
 		}
 
+		private Packet<TOut> PrepareVoicePacket(ReadOnlySpan<byte> data, PacketType packetType, PacketFlags flags, ushort packetId, uint generationId)
+		{
+			var packet = new Packet<TOut>(data, packetType, packetId, generationId) { PacketType = packetType };
+			if (typeof(TOut) == typeof(C2S))
+			{
+				var meta = (C2S)(object)packet.HeaderExt!;
+				meta.ClientId = ClientId.Value;
+				packet.HeaderExt = (TOut)(object)meta;
+			}
+			packet.PacketFlags |= flags;
+			packet.PacketFlags |= PacketFlags.Unencrypted;
+			BinaryPrimitives.WriteUInt16BigEndian(packet.Data, packet.PacketId);
+			LogRawVoice.Trace("[O] {0}", packet);
+			tsCrypt.Encrypt(ref packet);
+			return packet;
+		}
+
 		private (ushort Id, uint Generation) GetPacketCounter(PacketType packetType)
 			=> (packetType != PacketType.Init1)
 				? (packetCounter[(int)packetType], generationCounter[(int)packetType])
@@ -470,11 +527,11 @@ namespace TSLib.Full
 			{
 			case PacketType.Voice:
 				LogRawVoice.Trace("[I] {0}", packet);
-				passPacketToEvent = ReceiveVoice(ref packet, receiveWindowVoice);
+				passPacketToEvent = ReceiveVoice(ref packet, GetVoiceWindow(receiveWindowVoicePerClient, GetPacketClientId(ref packet)));
 				break;
 			case PacketType.VoiceWhisper:
 				LogRawVoice.Trace("[I] {0}", packet);
-				passPacketToEvent = ReceiveVoice(ref packet, receiveWindowVoiceWhisper);
+				passPacketToEvent = ReceiveVoice(ref packet, GetVoiceWindow(receiveWindowVoiceWhisperPerClient, GetPacketClientId(ref packet)));
 				break;
 			case PacketType.Command:
 				LogRaw.Debug("[I] {0}", packet);
@@ -518,14 +575,38 @@ namespace TSLib.Full
 			GenerationWindow window;
 			switch (packet.PacketType)
 			{
-			case PacketType.Voice: window = receiveWindowVoice; break;
-			case PacketType.VoiceWhisper: window = receiveWindowVoiceWhisper; break;
+			case PacketType.Voice:
+				window = GetVoiceWindow(receiveWindowVoicePerClient, GetPacketClientId(ref packet));
+				break;
+			case PacketType.VoiceWhisper:
+				window = GetVoiceWindow(receiveWindowVoiceWhisperPerClient, GetPacketClientId(ref packet));
+				break;
 			case PacketType.Command: window = receiveQueueCommand.Window; break;
 			case PacketType.CommandLow: window = receiveQueueCommandLow.Window; break;
 			default: return;
 			}
 
 			packet.GenerationId = window.GetGeneration(packet.PacketId);
+		}
+
+		private ushort GetPacketClientId(ref Packet<TIn> packet)
+		{
+			if (packet.HeaderExt is S2C s2c)
+				return s2c.ClientId;
+			return 0;
+		}
+
+		private GenerationWindow GetVoiceWindow(Dictionary<ushort, GenerationWindow> dict, ushort clientId)
+		{
+			lock (voiceWindowLock)
+			{
+				if (!dict.TryGetValue(clientId, out var window))
+				{
+					window = new GenerationWindow(ushort.MaxValue + 1);
+					dict[clientId] = window;
+				}
+				return window;
+			}
 		}
 
 		private bool ReceiveVoice(ref Packet<TIn> packet, GenerationWindow window)
