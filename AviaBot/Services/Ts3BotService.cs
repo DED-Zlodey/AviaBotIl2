@@ -45,14 +45,17 @@ public class Ts3BotService : IHostedService, IDisposable
 	private readonly RelaySettings _relaySettings;
 
 	/// <summary>
-	/// Настройки записи голосовых данных, используемые в процессе работы бота.
-	/// Параметры включают в себя управление включением/выключением записи,
-	/// указание пути для сохранения записей и настройку максимального времени
-	/// простоя потока речи до завершения записи.
+	/// Настройки синтетической нагрузки для сервиса <c>Ts3BotService</c>.
+	/// Используются для конфигурации параметров симуляции голосового взаимодействия,
+	/// включая включение/отключение нагрузки и количество виртуальных спикеров.
 	/// </summary>
-	private readonly RecordingSettings _recordingSettings;
-	private readonly VoicePlaybackTestService _voicePlaybackTestService;
 	private readonly SyntheticLoadSettings _syntheticLoadSettings;
+
+	/// <summary>
+	/// Настройки для тестового воспроизведения голосовых записей в сервисе <c>Ts3BotService</c>.
+	/// Эти настройки определяют параметры воспроизведения, такие как включение функции,
+	/// целевого пользователя и удаленность воспроизводимых файлов.
+	/// </summary>
 	private readonly TestVoicePlaybackSettings _testSettings;
 
 	/// <summary>
@@ -86,38 +89,25 @@ public class Ts3BotService : IHostedService, IDisposable
 	private CancellationTokenSource? _cts;
 
 	/// <summary>
-	/// Свойство, указывающее текущее состояние подключения к серверу TeamSpeak.
-	/// Если значение <c>true</c>, то установленное соединение активно; если <c>false</c>, то соединение отсутствует.
-	/// Использует внутренний объект <c>TsFullClient</c> для определения статуса подключения.
-	/// </summary>
-	public bool IsConnected => _tsFullClient?.Connected ?? false;
-
-	/// <summary>
-	/// Клиент TeamSpeak, используемый для взаимодействия с функциональностью TeamSpeak Server в рамках сервиса <c>Ts3BotService</c>.
-	/// Предоставляет доступ к методам и событиям для работы с подключением и управления сервером.
-	/// </summary>
-	public TsFullClient? Client => _tsFullClient;
-
-	/// <summary>
 	/// Сервис для работы с TS3 сервером с использованием AviaBot.
 	/// Управляет подключением, отправкой сообщений и обработкой событий.
 	/// </summary>
 	private SyntheticVoiceInjector? _syntheticInjector;
 
+	/// <summary>
+	/// Сервис, управляющий функциональностью TeamSpeak 3 бота, включает в себя подключение, отправку сообщений
+	/// и взаимодействие с другими процессами.
+	/// </summary>
 	public Ts3BotService(
 		IOptions<Ts3Settings> settings,
 		PlayerPositionService positionService,
 		RelaySettings relaySettings,
-		IOptions<RecordingSettings> recordingSettings,
-		VoicePlaybackTestService voicePlaybackTestService,
 		IOptions<SyntheticLoadSettings> syntheticLoadSettings,
 		IOptions<TestVoicePlaybackSettings> testSettings)
 	{
 		_settings = settings.Value;
 		_positionService = positionService;
 		_relaySettings = relaySettings;
-		_recordingSettings = recordingSettings.Value;
-		_voicePlaybackTestService = voicePlaybackTestService;
 		_syntheticLoadSettings = syntheticLoadSettings.Value;
 		_testSettings = testSettings.Value;
 	}
@@ -166,7 +156,6 @@ public class Ts3BotService : IHostedService, IDisposable
 		Log.Information("Stopping Ts3BotService...");
 		await _cts?.CancelAsync()!;
 
-		_voicePlaybackTestService.StopPlayback();
 
 		if (_scheduler != null)
 		{
@@ -204,10 +193,10 @@ public class Ts3BotService : IHostedService, IDisposable
 			};
 
 			// Identity
-			var identityPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory!, "identity.json");
+			var identityPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "identity.json");
 			if (File.Exists(identityPath))
 			{
-				var json = await File.ReadAllTextAsync(identityPath);
+				var json = await File.ReadAllTextAsync(identityPath, ct);
 				var saved = JsonConvert.DeserializeObject<SavedIdentity>(json);
 				if (saved?.PrivateKey != null)
 				{
@@ -232,7 +221,7 @@ public class Ts3BotService : IHostedService, IDisposable
 					PrivateKey = _identity.PrivateKeyString,
 					Offset = _identity.ValidKeyOffset
 				};
-				await File.WriteAllTextAsync(identityPath, JsonConvert.SerializeObject(saved, Formatting.Indented));
+				await File.WriteAllTextAsync(identityPath, JsonConvert.SerializeObject(saved, Formatting.Indented), ct);
 				Log.Information("Generated and saved new identity");
 			}
 
@@ -248,7 +237,7 @@ public class Ts3BotService : IHostedService, IDisposable
 						PrivateKey = _identity.PrivateKeyString,
 						Offset = _identity.ValidKeyOffset
 					};
-					await File.WriteAllTextAsync(identityPath, JsonConvert.SerializeObject(saved, Formatting.Indented));
+					await File.WriteAllTextAsync(identityPath, JsonConvert.SerializeObject(saved, Formatting.Indented), ct);
 				}
 			}
 
@@ -276,9 +265,6 @@ public class Ts3BotService : IHostedService, IDisposable
 
 			Log.Information("Connected successfully!");
 
-			// Запускаем тестовое воспроизведение MP3, если включено (и не используется новый тестовый режим ретрансляции)
-			if (!_testSettings.Enabled)
-				_voicePlaybackTestService.StartPlayback(_tsFullClient);
 
 			// Устанавливаем VoiceRelayPipe (в потоке scheduler)
 			VoiceRelayPipe? voiceRelayPipe = null;
@@ -370,30 +356,12 @@ public class Ts3BotService : IHostedService, IDisposable
 		}
 	}
 
-	/// <summary>
-	/// Отправляет текстовое сообщение в текущий канал, используя соединение с TS3 сервером.
-	/// </summary>
-	/// <param name="message">Текст сообщения, которое необходимо отправить в канал.</param>
-	/// <returns>
-	/// Возвращает значение типа <see cref="Task{TResult}"/>, указывающее успех или неуспех операции.
-	/// True, если сообщение было успешно отправлено; False, если отправка не удалась.
-	/// </returns>
-	public async Task<bool> SendChannelMessageAsync(string message)
-	{
-		if (_tsFullClient == null || !_tsFullClient.Connected)
-			return false;
-
-		var result = await _tsFullClient.SendChannelMessage(message);
-		return result.Ok;
-	}
-
 	public void Dispose()
 	{
 		_syntheticInjector?.Dispose();
 		_cts?.Dispose();
 		_tsFullClient?.Dispose();
 		_scheduler?.Dispose();
-		_voicePlaybackTestService.Dispose();
 	}
 
 	/// <summary>

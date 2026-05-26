@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AviaBot", "AviaBot\AviaBot.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AviaBot.TestUser", "AviaBot.TestUser\AviaBot.TestUser.csproj", "{7DE603D3-CCD9-4573-8EA0-9B49BAC695D9}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Registrator", "Registrator\Registrator.csproj", "{35E19A24-0995-4211-BE4B-15FB440BB41B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -91,6 +93,18 @@ Global
 		{7DE603D3-CCD9-4573-8EA0-9B49BAC695D9}.Release|x64.Build.0 = Release|Any CPU
 		{7DE603D3-CCD9-4573-8EA0-9B49BAC695D9}.Release|x86.ActiveCfg = Release|Any CPU
 		{7DE603D3-CCD9-4573-8EA0-9B49BAC695D9}.Release|x86.Build.0 = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|x64.Build.0 = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Debug|x86.Build.0 = Debug|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|x64.ActiveCfg = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|x64.Build.0 = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|x86.ActiveCfg = Release|Any CPU
+		{35E19A24-0995-4211-BE4B-15FB440BB41B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -85,6 +85,7 @@ public class RelayService
 		{
 			Id = int.TryParse(message.SenderId, out var id) ? id : 0,
 			GamerName = message.SenderId,
+			TeamSpeakId = message.SenderTs3Uid,
 			X = message.Position.X,
 			Y = message.Position.Y,
 			Z = message.Position.Z,
@@ -260,31 +261,4 @@ public class RelayService
 
 		return new string(chars);
 	}
-}
-
-public class RelaySettings
-{
-	public double MaxDistance { get; set; } = 1000.0;
-	public bool CoalitionCheck { get; set; } = true;
-
-	/// <summary>Таймаут определения конца речи по отсутствию пакетов (мс).</summary>
-	public int SpeechTimeoutMs { get; set; } = 350;
-
-	/// <summary>Включить ретрансляцию в лобби (без ограничения дистанции).</summary>
-	public bool LobbyEnabled { get; set; } = true;
-
-	/// <summary>Включить радио-эффекты (шум, затухание, dropout).</summary>
-	public bool RadioEffectsEnabled { get; set; } = false;
-
-	/// <summary>Дискретные уровни качества радиосвязи по дальности.</summary>
-	public List<RadioQualityLevel> RadioQualityLevels { get; set; } = new()
-	{
-		new() { MaxFactor = 0.15, Attenuation = 0.00, Noise = 0.02, CrushBits = 0, Dropout = 0.00 },
-		new() { MaxFactor = 0.30, Attenuation = 0.10, Noise = 0.05, CrushBits = 1, Dropout = 0.00 },
-		new() { MaxFactor = 0.50, Attenuation = 0.25, Noise = 0.10, CrushBits = 2, Dropout = 0.05 },
-		new() { MaxFactor = 0.70, Attenuation = 0.45, Noise = 0.20, CrushBits = 3, Dropout = 0.15 },
-		new() { MaxFactor = 0.85, Attenuation = 0.65, Noise = 0.35, CrushBits = 4, Dropout = 0.35 },
-		new() { MaxFactor = 0.95, Attenuation = 0.80, Noise = 0.50, CrushBits = 5, Dropout = 0.60 },
-		new() { MaxFactor = 1.00, Attenuation = 1.00, Noise = 0.70, CrushBits = 6, Dropout = 0.90 },
-	};
 }

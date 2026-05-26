@@ -67,6 +67,7 @@ public class SyntheticVoiceInjector : IDisposable
 			var name = $"SyntheticSpeaker_{i:00}";
 
 			var client = new Client { Name = name, Channel = ChannelId.Null };
+			typeof(Client).GetProperty("Uid")?.SetValue(client, new Uid(name));
 			_tsClient.Book.Clients[clientId] = client;
 
 			var session = new PlayerSession
@@ -74,6 +75,7 @@ public class SyntheticVoiceInjector : IDisposable
 				Id = baseId + i,
 				Country = 101,
 				GamerName = name,
+				TeamSpeakId = name,
 				ObjectName = "SynthPlane",
 				TypeObject = "aircraft",
 				X = 40000 + i * 500,

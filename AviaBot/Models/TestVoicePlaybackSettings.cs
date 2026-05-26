@@ -13,6 +13,11 @@ public class TestVoicePlaybackSettings
 	public string TargetNickname { get; set; } = "-DED-Zlodey";
 
 	/// <summary>
+	/// TS3 UID целевого пользователя для тестового whisper-голоса.
+	/// </summary>
+	public string TargetTs3Uid { get; set; } = "";
+
+	/// <summary>
 	/// Путь к первому MP3-файлу (начинает воспроизводиться сразу).
 	/// </summary>
 	public string File1 { get; set; } = "recordings/1.mp3";

@@ -20,7 +20,7 @@ public class PlayerPositionService
 	/// их респаун, перемещение и другие связанные события.
 	/// </summary>
 	private static readonly Serilog.ILogger Log = Serilog.Log.ForContext<PlayerPositionService>();
-	// --- Lobby (лобби) ---
+
 	/// <summary>
 	/// Потокобезопасное хранилище для отслеживания позиций союзных игроков, находящихся в лобби.
 	/// Ключом является нормализованное имя игрока (GamerName), а значением — объект <see cref="PlayerPosition"/>,
@@ -36,7 +36,7 @@ public class PlayerPositionService
 	/// Используется для управления состоянием игроков коалиции Axis до начала активной фазы игры.
 	/// </summary>
 	private readonly ConcurrentDictionary<string, PlayerPosition> _lobbyAxis = new();
-	// --- Active (в катке) ---
+
 	/// <summary>
 	/// Потокобезопасное хранилище для отслеживания позиций союзных игроков, находящихся в активной фазе игры (в катке).
 	/// Ключом является нормализованное имя игрока (GamerName), а значением — объект <see cref="PlayerPosition"/>,
@@ -54,11 +54,12 @@ public class PlayerPositionService
 	/// <summary>
 	/// Обрабатывает событие join — добавляет игрока в лобби.
 	/// </summary>
-	public void HandleJoin(PlayerSession session)
+	private void HandleJoin(PlayerSession session)
 	{
 		if (!IsValidCoalition(session.Country))
 		{
-			Log.Debug("HandleJoin: ignoring invalid coalition {Coalition} for {Name}", session.Country, session.GamerName);
+			Log.Debug("HandleJoin: ignoring invalid coalition {Coalition} for {Name}", session.Country,
+				session.GamerName);
 			return;
 		}
 
@@ -74,7 +75,7 @@ public class PlayerPositionService
 	/// <summary>
 	/// Обрабатывает событие leave — полностью удаляет игрока.
 	/// </summary>
-	public void HandleLeave(PlayerSession session)
+	private void HandleLeave(PlayerSession session)
 	{
 		var name = NormalizeName(session.GamerName);
 		if (RemoveFromAll(name))
@@ -103,7 +104,7 @@ public class PlayerPositionService
 	/// <summary>
 	/// Обрабатывает событие despawn — перемещает из катки в лобби.
 	/// </summary>
-	public void HandleDespawn(PlayerSession session)
+	private void HandleDespawn(PlayerSession session)
 	{
 		MoveToLobby(session);
 	}
@@ -111,7 +112,7 @@ public class PlayerPositionService
 	/// <summary>
 	/// Обрабатывает событие detach — перемещает из катки в лобби.
 	/// </summary>
-	public void HandleDetach(PlayerSession session)
+	private void HandleDetach(PlayerSession session)
 	{
 		MoveToLobby(session);
 	}
@@ -119,7 +120,7 @@ public class PlayerPositionService
 	/// <summary>
 	/// Обрабатывает событие position — обновляет координаты игрока в катке.
 	/// </summary>
-	public void HandlePosition(PlayerSession session)
+	private void HandlePosition(PlayerSession session)
 	{
 		if (!IsValidCoalition(session.Country))
 			return;
@@ -137,18 +138,18 @@ public class PlayerPositionService
 			existing.ObjectName = session.ObjectName;
 			existing.TypeObject = session.TypeObject;
 			existing.Coalition = session.Country;
+			existing.Ts3Uid = session.TeamSpeakId;
 		}
 		else
 		{
-			// Если не найден в active, возможно он в лобби — игнорируем позицию
-			Log.Debug("HandlePosition: {Name} not found in active, ignoring position update", session.GamerName);
+			HandleSpawn(session);
 		}
 	}
 
 	/// <summary>
 	/// Обрабатывает событие clear — очищает все списки.
 	/// </summary>
-	public void HandleClear()
+	private void HandleClear()
 	{
 		_lobbyAllies.Clear();
 		_lobbyAxis.Clear();
@@ -164,34 +165,32 @@ public class PlayerPositionService
 	{
 		switch (session.Event?.ToLowerInvariant())
 		{
-			case "join":
-				HandleJoin(session);
-				break;
-			case "leave":
-				HandleLeave(session);
-				break;
-			case "spawn":
-				HandleSpawn(session);
-				break;
-			case "despawn":
-				HandleDespawn(session);
-				break;
-			case "detach":
-				HandleDetach(session);
-				break;
-			case "position":
-				HandlePosition(session);
-				break;
-			case "clear":
-				HandleClear();
-				break;
-			default:
-				Log.Warning("ProcessEvent: unknown event '{Event}' for {Name}", session.Event, session.GamerName);
-				break;
+		case "join":
+			HandleJoin(session);
+			break;
+		case "leave":
+			HandleLeave(session);
+			break;
+		case "spawn":
+			HandleSpawn(session);
+			break;
+		case "despawn":
+			HandleDespawn(session);
+			break;
+		case "detach":
+			HandleDetach(session);
+			break;
+		case "position":
+			HandlePosition(session);
+			break;
+		case "clear":
+			HandleClear();
+			break;
+		default:
+			Log.Warning("ProcessEvent: unknown event '{Event}' for {Name}", session.Event, session.GamerName);
+			break;
 		}
 	}
-
-	// --- Legacy compatibility ---
 
 	/// <summary>
 	/// Добавляет или обновляет позицию в активном списке (для обратной совместимости).
@@ -214,6 +213,7 @@ public class PlayerPositionService
 			existing.Pid = session.Pid;
 			existing.ObjectName = session.ObjectName;
 			existing.TypeObject = session.TypeObject;
+			existing.Ts3Uid = session.TeamSpeakId;
 		}
 		else
 		{
@@ -266,6 +266,8 @@ public class PlayerPositionService
 
 		foreach (var session in dict.Values)
 		{
+			if (string.IsNullOrWhiteSpace(session.Ts3Uid)) continue;
+
 			double dx = session.X - centerX;
 			double dy = session.Y - centerY;
 			double dz = session.Z - centerZ;
@@ -284,29 +286,10 @@ public class PlayerPositionService
 	{
 		var dict = GetLobbyDictionary(coalition);
 		foreach (var session in dict.Values)
+		{
+			if (string.IsNullOrWhiteSpace(session.Ts3Uid)) continue;
 			yield return session;
-	}
-
-	/// <summary>
-	/// Возвращает перечисление всех позиций игроков, находящихся в лобби и в активной игре.
-	/// </summary>
-	/// <returns>
-	/// Перечисление объектов типа PlayerPosition, представляющих всех игроков из всех списков.
-	/// </returns>
-	public IEnumerable<PlayerPosition> GetAll()
-	{
-		foreach (var session in _lobbyAllies.Values) yield return session;
-		foreach (var session in _lobbyAxis.Values) yield return session;
-		foreach (var session in _activeAllies.Values) yield return session;
-		foreach (var session in _activeAxis.Values) yield return session;
-	}
-
-	/// <summary>
-	/// Очищает все списки игроков, включая списки лобби и активных игроков.
-	/// </summary>
-	public void Clear()
-	{
-		HandleClear();
+		}
 	}
 
 	/// <summary>
@@ -314,24 +297,32 @@ public class PlayerPositionService
 	/// </summary>
 	/// <param name="name">Имя игрока, подлежащее проверке.</param>
 	/// <returns>Значение true, если игрок находится в лобби, иначе false.</returns>
-	public bool IsInLobby(string name)
-	{
-		var key = NormalizeName(name);
-		return _lobbyAllies.ContainsKey(key) || _lobbyAxis.ContainsKey(key);
-	}
-
 	/// <summary>
-	/// Проверяет, находится ли игрок в катке.
+	/// Пытается получить позицию игрока по его TS3 UID.
+	/// Выполняет поиск среди всех состояний: Lobby и Active.
 	/// </summary>
-	/// <param name="name">Имя игрока.</param>
-	/// <returns>Значение true, если игрок в катке; иначе false.</returns>
-	public bool IsInGame(string name)
+	/// <param name="ts3Uid">TS3 UID игрока.</param>
+	/// <param name="session">Выходной параметр, содержащий найденную позицию игрока или null, если игрок не найден.</param>
+	/// <returns>Возвращает true, если игрок найден, иначе false.</returns>
+	public bool TryGetByTs3Uid(string? ts3Uid, out PlayerPosition? session)
 	{
-		var key = NormalizeName(name);
-		return _activeAllies.ContainsKey(key) || _activeAxis.ContainsKey(key);
-	}
+		session = null;
+		if (string.IsNullOrWhiteSpace(ts3Uid)) return false;
 
-	// --- Private helpers ---
+		foreach (var dict in new[] { _lobbyAllies, _lobbyAxis, _activeAllies, _activeAxis })
+		{
+			foreach (var kvp in dict)
+			{
+				if (kvp.Value.Ts3Uid == ts3Uid)
+				{
+					session = kvp.Value;
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
 
 	/// <summary>
 	/// Проверяет, является ли указанная коалиция допустимой.
@@ -403,8 +394,11 @@ public class PlayerPositionService
 			Pid = session.Pid,
 			ObjectName = session.ObjectName,
 			TypeObject = session.TypeObject,
+			Ts3Uid = session.TeamSpeakId,
 			IsInLobby = isInLobby,
-			Category = Enum.TryParse<CategoryObject>(session.TypeObject, true, out var cat) ? cat : CategoryObject.unknown
+			Category = Enum.TryParse<CategoryObject>(session.TypeObject, true, out var cat)
+				? cat
+				: CategoryObject.unknown
 		};
 	}
 
