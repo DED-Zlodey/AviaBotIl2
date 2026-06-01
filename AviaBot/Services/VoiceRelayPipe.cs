@@ -105,6 +105,11 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 	private const float BaseNoiseAmp = 600f;
 
 	/// <summary>
+	/// Общая громкость радио-эффектов (шум, треск, squelch). 1.0 = 100%.
+	/// </summary>
+	private const float EffectVolume = 0.5f;
+
+	/// <summary>
 	/// Биквадратный (biquad) фильтр второго порядка.
 	/// Используется для полосовой фильтрации голоса и шума.
 	/// </summary>
@@ -650,7 +655,7 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 			else
 				_crackleAmp *= 0.97f;
 
-			float noiseAmp = BaseNoiseAmp + _squelchTail;
+			float noiseAmp = (BaseNoiseAmp + _squelchTail) * EffectVolume;
 
 			for (int i = 0; i < FrameSamples; i++)
 			{
@@ -660,7 +665,7 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 
 				float noise = (float)filtered * noiseAmp;
 				float crackle = _crackleAmp > 1f
-					? NextLcgNoise() * _crackleAmp
+					? NextLcgNoise() * _crackleAmp * EffectVolume
 					: 0f;
 
 				int mixed = mixBuf[i] + (int)noise + (int)crackle;
