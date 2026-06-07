@@ -110,6 +110,52 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 	private const float EffectVolume = 0.5f;
 
 	/// <summary>
+	/// Целевое значение RMS (Root Mean Square) для автоматической регулировки усиления (AGC).
+	/// Используется для поддержания уровня громкости аудиофреймов на заданном уровне
+	/// (примерно -18 dBFS для 16-битного аудио).
+	/// </summary>
+	private const float AgcTargetRms = 10000f;       // ~ -18 dBFS для 16-bit
+
+	/// <summary>
+	/// Уровень порога шумоподавления, ниже которого звук считается тишиной или шумом.
+	/// Используется в автоматическом управлении усилением (AGC) для подавления фонового шума.
+	/// </summary>
+	private const float AgcNoiseGate = 400f;        // Ниже — считаем тишиной/шумом
+
+	/// <summary>
+	/// Минимальное значение коэффициента усиления для автоматической регулировки усиления (AGC).
+	/// Определяет нижнюю границу, ниже которой уровень усиления не понижается,
+	/// чтобы избежать чрезмерного ослабления сигнала. Указанное значение
+	/// соответствует ослаблению не более чем в три раза.
+	/// </summary>
+	private const float AgcMinGain = 0.3f;          // Не ослабляем сильнее чем в 3 раза
+
+	/// <summary>
+	/// Максимально допустимый коэффициент усиления для автоматической регулировки громкости (AGC).
+	/// Определяет верхнюю границу, ограничивающую усиление аудиосигнала,
+	/// чтобы избежать чрезмерного увеличения уровня сигнала в процессе обработки.
+	/// </summary>
+	private const float AgcMaxGain = 6.0f;          // Не усиливаем сильнее чем в 6 раза
+
+	/// <summary>
+	/// Константа, определяющая коэффициент сглаживания при увеличении значения усиления
+	/// в автоматической системе регулирования (AGC). Используется для настройки скорости
+	/// реакции AGC на увеличение громкости речи.
+	/// </summary>
+	private const float AgcAttackAlpha = 0.03f;     // gain ↑, медленнее (при громкой речи)
+
+	/// <summary>
+	/// Коэффициент сглаживания для автоматической регулировки усиления (AGC) при уменьшении уровня усиления.
+	/// Используется для адаптации уровня громкости при затихании звука.
+	/// </summary>
+	private const float AgcReleaseAlpha = 0.08f;    // gain ↓, чуть быстрее (при затихании)
+
+	/// <summary>
+	/// Глобальный множитель громкости на весь смикшированный сигнал перед кодированием.
+	/// </summary>
+	private const float OutputGain = 5f;
+
+	/// <summary>
 	/// Биквадратный (biquad) фильтр второго порядка.
 	/// Используется для полосовой фильтрации голоса и шума.
 	/// </summary>
@@ -192,6 +238,12 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 		/// и очистки устаревших буферов.
 		/// </summary>
 		public DateTime LastSeen = DateTime.UtcNow;
+
+		/// <summary>
+		/// Текущий плавный gain для AGC (Automatic Gain Control).
+		/// Хранится per-speaker, чтобы выравнивать громкость независимо от других.
+		/// </summary>
+		public float SmoothGain = 1.0f;
 	}
 
 	/// <summary>
@@ -605,12 +657,39 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 
 		try
 		{
-			// Mix PCM
+			// Mix PCM + per-speaker AGC
 			Array.Clear(mixBuf, 0, FrameSamples);
 			if (hasSpeakers)
 			{
-				foreach (var (_, pcm, _) in _activeSpeakers)
+				foreach (var (_, pcm, buf) in _activeSpeakers)
 				{
+					// AGC: измеряем RMS фрейма
+					float sumSq = 0;
+					for (int i = 0; i < FrameSamples; i++)
+						sumSq += pcm[i] * pcm[i];
+					float rms = MathF.Sqrt(sumSq / FrameSamples);
+
+					// Noise gate + плавная адаптация gain
+					if (rms > AgcNoiseGate)
+					{
+						float desired = AgcTargetRms / (rms + 1f);
+						desired = Math.Clamp(desired, AgcMinGain, AgcMaxGain);
+						float alpha = (desired > buf.SmoothGain) ? AgcAttackAlpha : AgcReleaseAlpha;
+						buf.SmoothGain += (desired - buf.SmoothGain) * alpha;
+					}
+					else
+					{
+						// В тишине плавно возвращаем gain к 1.0
+						buf.SmoothGain += (1.0f - buf.SmoothGain) * AgcReleaseAlpha;
+					}
+
+					// Применяем gain к PCM (in-place)
+					if (MathF.Abs(buf.SmoothGain - 1.0f) > 0.01f)
+					{
+						for (int i = 0; i < FrameSamples; i++)
+							pcm[i] = (short)Math.Clamp(pcm[i] * buf.SmoothGain, short.MinValue, short.MaxValue);
+					}
+
 					for (int i = 0; i < FrameSamples; i++)
 					{
 						int sum = mixBuf[i] + pcm[i];
@@ -672,11 +751,12 @@ public class VoiceRelayPipe : IAudioPassiveConsumer, IDisposable
 				mixBuf[i] = (short)Math.Clamp(mixed, short.MinValue, short.MaxValue);
 			}
 
-			// PCM → bytes
+			// PCM → bytes (с глобальным выходным gain)
 			for (int i = 0; i < FrameSamples; i++)
 			{
-				pcmBytes[i * 2] = (byte)(mixBuf[i] & 0xFF);
-				pcmBytes[i * 2 + 1] = (byte)((mixBuf[i] >> 8) & 0xFF);
+				short sample = (short)Math.Clamp(mixBuf[i] * OutputGain, short.MinValue, short.MaxValue);
+				pcmBytes[i * 2] = (byte)(sample & 0xFF);
+				pcmBytes[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
 			}
 
 			// Encode → Opus (mono, VoIP)

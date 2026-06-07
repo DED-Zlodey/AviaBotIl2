@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TSLib\TSLib.csproj" />
+    <ProjectReference Include="..\Registrator.RabbitMq\Registrator.RabbitMq.csproj" />
   </ItemGroup>
 
   <ItemGroup>
