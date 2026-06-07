@@ -4,9 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 using Registrator.Data;
 using Registrator.Models;
+using Registrator.Interfaces;
+using Registrator.RabbitMq;
 using Registrator.Services;
 using Serilog;
 
@@ -38,9 +39,13 @@ namespace Registrator
                     .ConfigureServices((ctx, services) =>
                     {
                         services.Configure<RegistratorSettings>(ctx.Configuration.GetSection("Ts3"));
+                        services.Configure<RabbitMqSettings>(ctx.Configuration.GetSection("RabbitMq"));
+                        services.AddSingleton<ITs3ClientAccessor, Ts3ClientAccessor>();
+                        services.AddSingleton<ITs3EventPublisher, RabbitMqTs3EventPublisher>();
                         services.AddDbContextFactory<AppDbContext>(options =>
                             options.UseNpgsql(ctx.Configuration.GetConnectionString("Default")));
                         services.AddHostedService<Ts3RegistratorService>();
+                        services.AddHostedService<Ts3MonitorService>();
                     })
                     .UseConsoleLifetime()
                     .Build();
@@ -54,7 +59,7 @@ namespace Registrator
             }
             finally
             {
-                Log.CloseAndFlush();
+                await Log.CloseAndFlushAsync();
             }
         }
     }
